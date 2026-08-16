@@ -19,6 +19,8 @@ async function getSettings() {
   }
 }
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   await ensureDbInitialized();
   try {

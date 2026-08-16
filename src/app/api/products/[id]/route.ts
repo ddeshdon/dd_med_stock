@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import db, { ensureDbInitialized } from "@/lib/db";
 import { Product } from "@/lib/types";
 
+export const dynamic = "force-dynamic";
+
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }

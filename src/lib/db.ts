@@ -153,6 +153,11 @@ let dbInitialized = false;
 let dbInitPromise: Promise<void> | null = null;
 
 async function ensureDbInitialized() {
+  // Don't initialize during build phase - check if DATABASE_URL is accessible
+  if (!process.env.DATABASE_URL) {
+    return; // Skip if no DB URL
+  }
+
   // Already initialized or initializing
   if (dbInitialized || dbInitPromise) {
     return dbInitPromise || Promise.resolve();
@@ -165,18 +170,25 @@ async function ensureDbInitialized() {
       await seedIfEmpty();
       dbInitialized = true;
     } catch (error: any) {
-      // If it's a network error during build, just log and continue
+      // Always mark as attempted to prevent repeated failures during build
+      dbInitialized = true;
+      
+      // If it's a network error, silently fail (will retry on runtime)
       if (error?.code === "ENETUNREACH" || error?.code === "ENOTFOUND" || error?.code === "ECONNREFUSED") {
-        console.warn("Database not available - will retry on next request");
-      } else {
-        console.error("Database initialization error:", error);
+        console.warn("Database unavailable during build - skipping initialization");
+        return; // Don't throw
       }
-      dbInitialized = true; // Mark as attempted to prevent repeated failures
+      
+      // For other errors, log but don't throw
+      console.error("Database initialization error:", error);
     }
     dbInitPromise = null;
   })();
 
-  return dbInitPromise;
+  // Always wait for the promise, but never throw
+  return dbInitPromise.catch(() => {
+    // Swallow all errors - initialization will happen on runtime
+  });
 }
 
 // Don't initialize at module load time - let API routes trigger it

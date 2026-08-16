@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import db, { ensureDbInitialized } from "@/lib/db";
 import { Product, Purchase } from "@/lib/types";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const limit = Number(searchParams.get("limit")) || 200;

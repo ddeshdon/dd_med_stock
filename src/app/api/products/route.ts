@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import db, { ensureDbInitialized } from "@/lib/db";
 import { Product } from "@/lib/types";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
-  await ensureDbInitialized();
   try {
+    await ensureDbInitialized();
     const result = await db.query(`SELECT * FROM products ORDER BY category, name`);
     return NextResponse.json(result.rows as Product[]);
   } catch (error) {

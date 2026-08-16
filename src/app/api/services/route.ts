@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import db, { ensureDbInitialized } from "@/lib/db";
 import { Service, ServiceItem } from "@/lib/types";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   await ensureDbInitialized();
   try {
