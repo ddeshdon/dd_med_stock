@@ -3,50 +3,53 @@ import db from "@/lib/db";
 import { Product } from "@/lib/types";
 
 export async function GET() {
-  const monthly = db
-    .prepare(
-      `SELECT strftime('%Y-%m', date) AS month,
-              SUM(gross_price) AS revenue,
-              SUM(owner_cut) AS owner_cut,
-              SUM(total_cost) AS cost,
-              SUM(profit) AS profit,
+  try {
+    const monthlyResult = await db.query(
+      `SELECT TO_CHAR(TO_DATE(date, 'YYYY-MM-DD'), 'YYYY-MM') AS month,
+              SUM(CAST(gross_price AS NUMERIC)) AS revenue,
+              SUM(CAST(owner_cut AS NUMERIC)) AS owner_cut,
+              SUM(CAST(total_cost AS NUMERIC)) AS cost,
+              SUM(CAST(profit AS NUMERIC)) AS profit,
               COUNT(*) AS sessions
        FROM sales
        GROUP BY month
        ORDER BY month ASC`
-    )
-    .all();
+    );
 
-  const totals = db
-    .prepare(
-      `SELECT SUM(gross_price) AS revenue, SUM(owner_cut) AS owner_cut, SUM(total_cost) AS cost, SUM(profit) AS profit, COUNT(*) AS sessions
+    const totalsResult = await db.query(
+      `SELECT SUM(CAST(gross_price AS NUMERIC)) AS revenue, 
+              SUM(CAST(owner_cut AS NUMERIC)) AS owner_cut, 
+              SUM(CAST(total_cost AS NUMERIC)) AS cost, 
+              SUM(CAST(profit AS NUMERIC)) AS profit, 
+              COUNT(*) AS sessions
        FROM sales`
-    )
-    .get();
+    );
 
-  const topServices = db
-    .prepare(
-      `SELECT service_name, COUNT(*) AS count, SUM(profit) AS profit, SUM(gross_price) AS revenue
+    const topServicesResult = await db.query(
+      `SELECT service_name, COUNT(*) AS count, SUM(CAST(profit AS NUMERIC)) AS profit, SUM(CAST(gross_price AS NUMERIC)) AS revenue
        FROM sales
        GROUP BY service_name
        ORDER BY revenue DESC
        LIMIT 8`
-    )
-    .all();
+    );
 
-  const lowStock = db
-    .prepare(`SELECT * FROM products WHERE stock_qty <= reorder_level ORDER BY stock_qty ASC`)
-    .all() as Product[];
+    const lowStockResult = await db.query(
+      `SELECT * FROM products WHERE stock_qty <= reorder_level ORDER BY stock_qty ASC`
+    );
 
-  const recentSales = db
-    .prepare(`SELECT * FROM sales ORDER BY date DESC, id DESC LIMIT 5`)
-    .all();
+    const recentSalesResult = await db.query(
+      `SELECT * FROM sales ORDER BY date DESC, id DESC LIMIT 5`
+    );
 
-  return NextResponse.json({
-    monthly,
-    totals,
-    topServices,
-    lowStock,
-    recentSales,
-  });
+    return NextResponse.json({
+      monthly: monthlyResult.rows,
+      totals: totalsResult.rows[0],
+      topServices: topServicesResult.rows,
+      lowStock: lowStockResult.rows as Product[],
+      recentSales: recentSalesResult.rows,
+    });
+  } catch (error) {
+    console.error("GET dashboard error:", error);
+    return NextResponse.json({ error: "Database error" }, { status: 500 });
+  }
 }

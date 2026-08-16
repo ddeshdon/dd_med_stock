@@ -3,10 +3,13 @@ import db from "@/lib/db";
 import { Product } from "@/lib/types";
 
 export async function GET() {
-  const products = db
-    .prepare(`SELECT * FROM products ORDER BY category, name`)
-    .all() as Product[];
-  return NextResponse.json(products);
+  try {
+    const result = await db.query(`SELECT * FROM products ORDER BY category, name`);
+    return NextResponse.json(result.rows as Product[]);
+  } catch (error) {
+    console.error("GET products error:", error);
+    return NextResponse.json({ error: "Database error" }, { status: 500 });
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -22,12 +25,10 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const info = db
-      .prepare(
-        `INSERT INTO products (name, category, unit, stock_qty, avg_cost, reorder_level, package_unit, package_size)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
+    const result = await db.query(
+      `INSERT INTO products (name, category, unit, stock_qty, avg_cost, reorder_level, package_unit, package_size)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [
         name.trim(),
         category,
         unit?.trim() || "unit",
@@ -35,16 +36,18 @@ export async function POST(req: NextRequest) {
         Number(avg_cost) || 0,
         Number(reorder_level) || 0,
         package_unit?.trim() || "",
-        Number(package_size) || 1
-      );
-    const product = db
-      .prepare(`SELECT * FROM products WHERE id = ?`)
-      .get(info.lastInsertRowid) as Product;
-    return NextResponse.json(product, { status: 201 });
-  } catch {
-    return NextResponse.json(
-      { error: "A product with this name already exists" },
-      { status: 409 }
+        Number(package_size) || 1,
+      ]
     );
+    return NextResponse.json(result.rows[0], { status: 201 });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("duplicate")) {
+      return NextResponse.json(
+        { error: "A product with this name already exists" },
+        { status: 409 }
+      );
+    }
+    console.error("POST products error:", error);
+    return NextResponse.json({ error: "Database error" }, { status: 500 });
   }
 }

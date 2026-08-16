@@ -7,32 +7,47 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const sale = db.prepare(`SELECT * FROM sales WHERE id = ?`).get(id) as
-    | Sale
-    | undefined;
-  if (!sale) {
-    return NextResponse.json({ error: "Sale not found" }, { status: 404 });
-  }
+  
+  try {
+    const saleResult = await db.query(`SELECT * FROM sales WHERE id = $1`, [id]);
+    const sale = saleResult.rows[0] as Sale | undefined;
+    
+    if (!sale) {
+      return NextResponse.json({ error: "Sale not found" }, { status: 404 });
+    }
 
-  db.transaction(() => {
-    const items = db
-      .prepare(`SELECT * FROM sale_items WHERE sale_id = ?`)
-      .all(id) as SaleItem[];
-    for (const item of items) {
-      if (item.product_id) {
-        const product = db
-          .prepare(`SELECT * FROM products WHERE id = ?`)
-          .get(item.product_id) as Product | undefined;
-        if (product) {
-          db.prepare(`UPDATE products SET stock_qty = stock_qty + ? WHERE id = ?`).run(
-            item.quantity,
-            product.id
-          );
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      
+      const itemsResult = await client.query(`SELECT * FROM sale_items WHERE sale_id = $1`, [id]);
+      const items = itemsResult.rows as SaleItem[];
+      
+      for (const item of items) {
+        if (item.product_id) {
+          const productResult = await client.query(`SELECT * FROM products WHERE id = $1`, [item.product_id]);
+          const product = productResult.rows[0] as Product | undefined;
+          if (product) {
+            await client.query(
+              `UPDATE products SET stock_qty = stock_qty + $1 WHERE id = $2`,
+              [item.quantity, product.id]
+            );
+          }
         }
       }
+      
+      await client.query(`DELETE FROM sales WHERE id = $1`, [id]);
+      await client.query("COMMIT");
+      
+      return NextResponse.json({ ok: true });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
     }
-    db.prepare(`DELETE FROM sales WHERE id = ?`).run(id);
-  })();
-
-  return NextResponse.json({ ok: true });
+  } catch (error) {
+    console.error("DELETE sales error:", error);
+    return NextResponse.json({ error: "Database error" }, { status: 500 });
+  }
 }

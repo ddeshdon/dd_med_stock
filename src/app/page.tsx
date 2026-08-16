@@ -7,52 +7,65 @@ import { formatCurrency, formatNumber, formatPercent } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-export default function DashboardPage() {
-  const monthly = db
-    .prepare(
-      `SELECT strftime('%Y-%m', date) AS month,
-              SUM(gross_price) AS revenue,
-              SUM(owner_cut) AS ownerCut,
-              SUM(total_cost) AS cost,
-              SUM(profit) AS profit,
-              COUNT(*) AS sessions
-       FROM sales GROUP BY month ORDER BY month ASC`
-    )
-    .all() as MonthlyRow[];
-
-  const totals = db
-    .prepare(
-      `SELECT SUM(gross_price) AS revenue, SUM(owner_cut) AS ownerCut, SUM(total_cost) AS cost, SUM(profit) AS profit, COUNT(*) AS sessions
-       FROM sales`
-    )
-    .get() as {
+export default async function DashboardPage() {
+  let monthly: MonthlyRow[] = [];
+  let totals: {
     revenue: number | null;
     ownerCut: number | null;
     cost: number | null;
     profit: number | null;
     sessions: number;
-  };
+  } = { revenue: 0, ownerCut: 0, cost: 0, profit: 0, sessions: 0 };
+  let lowStock: Product[] = [];
+  let recentSales: Sale[] = [];
+  let topServices: { service_name: string; count: number; profit: number; revenue: number }[] = [];
 
-  const revenue = totals.revenue || 0;
-  const ownerCut = totals.ownerCut || 0;
-  const cost = totals.cost || 0;
-  const profit = totals.profit || 0;
-  const margin = revenue > 0 ? profit / revenue : 0;
+  try {
+    const monthlyResult = await db.query(
+      `SELECT TO_CHAR(TO_DATE(date, 'YYYY-MM-DD'), 'YYYY-MM') AS month,
+              SUM(CAST(gross_price AS NUMERIC)) AS revenue,
+              SUM(CAST(owner_cut AS NUMERIC)) AS "ownerCut",
+              SUM(CAST(total_cost AS NUMERIC)) AS cost,
+              SUM(CAST(profit AS NUMERIC)) AS profit,
+              COUNT(*) AS sessions
+       FROM sales GROUP BY month ORDER BY month ASC`
+    );
+    monthly = monthlyResult.rows as MonthlyRow[];
 
-  const lowStock = db
-    .prepare(`SELECT * FROM products WHERE stock_qty <= reorder_level ORDER BY stock_qty ASC`)
-    .all() as Product[];
+    const totalsResult = await db.query(
+      `SELECT SUM(CAST(gross_price AS NUMERIC)) AS revenue, 
+              SUM(CAST(owner_cut AS NUMERIC)) AS "ownerCut", 
+              SUM(CAST(total_cost AS NUMERIC)) AS cost, 
+              SUM(CAST(profit AS NUMERIC)) AS profit, 
+              COUNT(*) AS sessions
+       FROM sales`
+    );
+    totals = totalsResult.rows[0] || { revenue: 0, ownerCut: 0, cost: 0, profit: 0, sessions: 0 };
 
-  const recentSales = db
-    .prepare(`SELECT * FROM sales ORDER BY date DESC, id DESC LIMIT 6`)
-    .all() as Sale[];
+    const lowStockResult = await db.query(
+      `SELECT * FROM products WHERE stock_qty <= reorder_level ORDER BY stock_qty ASC`
+    );
+    lowStock = lowStockResult.rows as Product[];
 
-  const topServices = db
-    .prepare(
-      `SELECT service_name, COUNT(*) AS count, SUM(profit) AS profit, SUM(gross_price) AS revenue
+    const recentSalesResult = await db.query(
+      `SELECT * FROM sales ORDER BY date DESC, id DESC LIMIT 6`
+    );
+    recentSales = recentSalesResult.rows as Sale[];
+
+    const topServicesResult = await db.query(
+      `SELECT service_name, COUNT(*) AS count, SUM(CAST(profit AS NUMERIC)) AS profit, SUM(CAST(gross_price AS NUMERIC)) AS revenue
        FROM sales GROUP BY service_name ORDER BY revenue DESC LIMIT 6`
-    )
-    .all() as { service_name: string; count: number; profit: number; revenue: number }[];
+    );
+    topServices = topServicesResult.rows;
+  } catch (error) {
+    console.error("Dashboard error:", error);
+  }
+
+  const revenue = (totals.revenue as number) || 0;
+  const ownerCut = (totals.ownerCut as number) || 0;
+  const cost = (totals.cost as number) || 0;
+  const profit = (totals.profit as number) || 0;
+  const margin = revenue > 0 ? profit / revenue : 0;
 
   return (
     <div className="space-y-6">
