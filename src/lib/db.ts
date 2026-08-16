@@ -153,9 +153,16 @@ let dbInitialized = false;
 let dbInitPromise: Promise<void> | null = null;
 
 async function ensureDbInitialized() {
-  // Don't initialize during build phase - check if DATABASE_URL is accessible
+  // Skip during build phase - Vercel sets process.env.VercelURL during runtime only
+  // If this is running in build/prerender context, skip initialization
+  if (!process.env.VercelURL && process.env.NODE_ENV === "production") {
+    // We're in Vercel build environment (VercelURL not set = build time)
+    return;
+  }
+
+  // Don't initialize if no DATABASE_URL
   if (!process.env.DATABASE_URL) {
-    return; // Skip if no DB URL
+    return;
   }
 
   // Already initialized or initializing
