@@ -191,22 +191,10 @@ async function ensureDbInitialized() {
   });
 }
 
-// Don't initialize at module load time - let API routes trigger it
-// This prevents errors during Vercel's build phase
-if (typeof window === "undefined") {
-  // Only in server context, and only after a small delay
-  // This allows the module to load without blocking
-  if (process.env.NODE_ENV === "production") {
-    // In production, initialize on first request (handled by ensureDbInitialized)
-  } else {
-    // In dev mode, try to initialize after a brief delay
-    setTimeout(() => {
-      ensureDbInitialized().catch(() => {
-        // Silently fail - will retry on request
-      });
-    }, 100);
-  }
-}
+// ⚠️ CRITICAL: NO MODULE-LEVEL DATABASE INITIALIZATION
+// Do NOT call migrate() or seedIfEmpty() here
+// Database initialization ONLY happens on first API request via ensureDbInitialized()
+// This prevents build-time connection errors in Vercel
 
 async function seedIfEmpty() {
   try {
