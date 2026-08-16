@@ -8,6 +8,23 @@ import { formatCurrency, formatNumber, formatPercent } from "@/lib/format";
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
+  // Check if DATABASE_URL is set  
+  if (!process.env.DATABASE_URL) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-semibold text-slate-800">Dashboard</h1>
+            <p className="text-sm text-slate-500">Overview of your clinic&apos;s stock and margins.</p>
+          </div>
+        </div>
+        <Card className="p-6 bg-amber-50 border-amber-200">
+          <p className="text-sm text-amber-800">⚠️ Database is not configured. Please set the DATABASE_URL environment variable.</p>
+        </Card>
+      </div>
+    );
+  }
+
   let monthly: MonthlyRow[] = [];
   let totals: {
     revenue: number | null;
@@ -19,6 +36,7 @@ export default async function DashboardPage() {
   let lowStock: Product[] = [];
   let recentSales: Sale[] = [];
   let topServices: { service_name: string; count: number; profit: number; revenue: number }[] = [];
+  let dbError: string | null = null;
 
   try {
     const monthlyResult = await db.query(
@@ -57,8 +75,16 @@ export default async function DashboardPage() {
        FROM sales GROUP BY service_name ORDER BY revenue DESC LIMIT 6`
     );
     topServices = topServicesResult.rows;
-  } catch (error) {
+  } catch (error: any) {
     console.error("Dashboard error:", error);
+    // Capture error message for display
+    if (error?.code === "ENOTFOUND") {
+      dbError = `Database host cannot be reached: ${error?.hostname}. Check DATABASE_URL configuration.`;
+    } else if (error?.code === "ENETUNREACH" || error?.code === "ECONNREFUSED") {
+      dbError = "Cannot connect to database. Please try again later.";
+    } else {
+      dbError = `Database error: ${error?.message || "Unknown error"}`;
+    }
   }
 
   const revenue = (totals.revenue as number) || 0;
@@ -81,6 +107,12 @@ export default async function DashboardPage() {
           + Log a Sale
         </Link>
       </div>
+
+      {dbError && (
+        <Card className="p-4 bg-red-50 border-red-200">
+          <p className="text-sm text-red-800">🔴 {dbError}</p>
+        </Card>
+      )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
         <StatCard label="Gross Revenue" value={formatCurrency(revenue)} sub={`${totals.sessions} sessions (client paid)`} />

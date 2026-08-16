@@ -5,8 +5,13 @@ declare global {
   var __medStockDb: Pool | undefined;
 }
 
+// Log environment for debugging
+if (process.env.NODE_ENV === "production" && !process.env.DATABASE_URL) {
+  console.error("❌ CRITICAL: DATABASE_URL environment variable is not set in production!");
+}
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: process.env.DATABASE_URL || "",
   ssl: {
     rejectUnauthorized: false,
   },
