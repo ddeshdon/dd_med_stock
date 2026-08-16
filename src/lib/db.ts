@@ -20,16 +20,26 @@ if (process.env.NODE_ENV !== "production") {
 
 // Helper to run migrations
 async function executeQuery(sql: string) {
-  const client = await db.connect();
   try {
-    await client.query(sql);
-  } finally {
-    client.release();
+    const client = await db.connect();
+    try {
+      await client.query(sql);
+    } finally {
+      client.release();
+    }
+  } catch (error: any) {
+    // Silently fail if database not available (e.g., during build)
+    if (error?.code === "ENETUNREACH" || error?.code === "ENOTFOUND" || error?.code === "ECONNREFUSED") {
+      console.warn("Database not available during initialization - will retry at runtime");
+      return;
+    }
+    throw error;
   }
 }
 
 async function migrate() {
-  await executeQuery(`
+  try {
+    await executeQuery(`
     CREATE TABLE IF NOT EXISTS products (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL UNIQUE,
@@ -127,9 +137,26 @@ async function migrate() {
       [key, value]
     );
   }
+  } catch (error: any) {
+    // Silently fail if database not available (e.g., during build)
+    if (error?.code === "ENETUNREACH" || error?.code === "ENOTFOUND" || error?.code === "ECONNREFUSED") {
+      console.warn("Database not available during initialization - will retry at runtime");
+      return;
+    }
+    throw error;
+  }
 }
 
-migrate().catch(err => console.error("Migration error:", err));
+// Only run migrations at runtime, not during build
+if (process.env.NODE_ENV !== "development" || !process.env.VERCEL_ENV) {
+  migrate().catch(err => {
+    if (process.env.VERCEL_ENV === "preview" || process.env.VERCEL_ENV === "production") {
+      console.warn("Database not available during build - will initialize at runtime");
+    } else {
+      console.error("Migration error:", err);
+    }
+  });
+}
 
 async function seedIfEmpty() {
   try {
@@ -250,12 +277,23 @@ async function seedIfEmpty() {
         }
       }
     }
-  } catch (err) {
+  } catch (err: any) {
+    // Silently fail if database not available during build
+    if (err?.code === "ENETUNREACH" || err?.code === "ENOTFOUND" || err?.code === "ECONNREFUSED") {
+      console.warn("Database not available during initialization - will retry at runtime");
+      return;
+    }
     console.error("Seed error:", err);
   }
 }
 
-seedIfEmpty().catch(err => console.error("Seed failed:", err));
+seedIfEmpty().catch(err => {
+  if (process.env.VERCEL_ENV === "preview" || process.env.VERCEL_ENV === "production") {
+    console.warn("Seed skipped during build - will initialize at runtime");
+  } else {
+    console.error("Seed failed:", err);
+  }
+});
 
 export default db;
 export { Pool };
