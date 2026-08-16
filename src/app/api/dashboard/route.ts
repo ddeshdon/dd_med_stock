@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
-import db from "@/lib/db";
+import db, { ensureDbInitialized } from "@/lib/db";
 import { Product } from "@/lib/types";
 
 export async function GET() {
+  await ensureDbInitialized();
   try {
     const monthlyResult = await db.query(
       `SELECT TO_CHAR(TO_DATE(date, 'YYYY-MM-DD'), 'YYYY-MM') AS month,

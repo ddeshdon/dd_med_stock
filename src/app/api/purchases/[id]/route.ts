@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import db from "@/lib/db";
+import db, { ensureDbInitialized } from "@/lib/db";
 import { Product, Purchase } from "@/lib/types";
 
 export async function DELETE(

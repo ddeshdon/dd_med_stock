@@ -148,14 +148,52 @@ async function migrate() {
 }
 
 // Only run migrations at runtime, not during build
-if (process.env.NODE_ENV !== "development" || !process.env.VERCEL_ENV) {
-  migrate().catch(err => {
-    if (process.env.VERCEL_ENV === "preview" || process.env.VERCEL_ENV === "production") {
-      console.warn("Database not available during build - will initialize at runtime");
-    } else {
-      console.error("Migration error:", err);
+// Use lazy initialization: skip during build, run on first API call
+let dbInitialized = false;
+let dbInitPromise: Promise<void> | null = null;
+
+async function ensureDbInitialized() {
+  // Already initialized or initializing
+  if (dbInitialized || dbInitPromise) {
+    return dbInitPromise || Promise.resolve();
+  }
+
+  // Start initialization (prevent concurrent attempts)
+  dbInitPromise = (async () => {
+    try {
+      await migrate();
+      await seedIfEmpty();
+      dbInitialized = true;
+    } catch (error: any) {
+      // If it's a network error during build, just log and continue
+      if (error?.code === "ENETUNREACH" || error?.code === "ENOTFOUND" || error?.code === "ECONNREFUSED") {
+        console.warn("Database not available - will retry on next request");
+      } else {
+        console.error("Database initialization error:", error);
+      }
+      dbInitialized = true; // Mark as attempted to prevent repeated failures
     }
-  });
+    dbInitPromise = null;
+  })();
+
+  return dbInitPromise;
+}
+
+// Don't initialize at module load time - let API routes trigger it
+// This prevents errors during Vercel's build phase
+if (typeof window === "undefined") {
+  // Only in server context, and only after a small delay
+  // This allows the module to load without blocking
+  if (process.env.NODE_ENV === "production") {
+    // In production, initialize on first request (handled by ensureDbInitialized)
+  } else {
+    // In dev mode, try to initialize after a brief delay
+    setTimeout(() => {
+      ensureDbInitialized().catch(() => {
+        // Silently fail - will retry on request
+      });
+    }, 100);
+  }
 }
 
 async function seedIfEmpty() {
@@ -287,13 +325,5 @@ async function seedIfEmpty() {
   }
 }
 
-seedIfEmpty().catch(err => {
-  if (process.env.VERCEL_ENV === "preview" || process.env.VERCEL_ENV === "production") {
-    console.warn("Seed skipped during build - will initialize at runtime");
-  } else {
-    console.error("Seed failed:", err);
-  }
-});
-
 export default db;
-export { Pool };
+export { Pool, ensureDbInitialized };

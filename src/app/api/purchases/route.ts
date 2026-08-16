@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import db from "@/lib/db";
+import db, { ensureDbInitialized } from "@/lib/db";
 import { Product, Purchase } from "@/lib/types";
 
 export async function GET(req: NextRequest) {
@@ -23,6 +23,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  await ensureDbInitialized();
   const body = await req.json();
   const { product_id, date, quantity, unit_price, shipping_fee, paid, note } = body;
 

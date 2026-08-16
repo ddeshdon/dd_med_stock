@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import db from "@/lib/db";
+import db, { ensureDbInitialized } from "@/lib/db";
 import { Service, ServiceItem } from "@/lib/types";
 
 export async function GET() {
+  await ensureDbInitialized();
   try {
     const services = await db.query(`SELECT * FROM services ORDER BY name`);
     const result = await Promise.all(

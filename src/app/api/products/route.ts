@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import db from "@/lib/db";
+import db, { ensureDbInitialized } from "@/lib/db";
 import { Product } from "@/lib/types";
 
 export async function GET() {
+  await ensureDbInitialized();
   try {
     const result = await db.query(`SELECT * FROM products ORDER BY category, name`);
     return NextResponse.json(result.rows as Product[]);
@@ -13,6 +14,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  await ensureDbInitialized();
   const body = await req.json();
   const { name, category, unit, reorder_level, stock_qty, avg_cost, package_unit, package_size } =
     body;

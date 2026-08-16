@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import db from "@/lib/db";
+import db, { ensureDbInitialized } from "@/lib/db";
 
 async function getSettings() {
   try {
@@ -20,6 +20,7 @@ async function getSettings() {
 }
 
 export async function GET() {
+  await ensureDbInitialized();
   try {
     const settings = await getSettings();
     return NextResponse.json(settings);
@@ -28,8 +29,7 @@ export async function GET() {
   }
 }
 
-export async function PATCH(req: NextRequest) {
-  const body = await req.json();
+export async function PATCH(req: NextRequest) {  await ensureDbInitialized();  const body = await req.json();
 
   try {
     if (body.default_deduction_type !== undefined) {

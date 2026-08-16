@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import db from "@/lib/db";
+import db, { ensureDbInitialized } from "@/lib/db";
 
 interface NumberedSaleRow {
   id: number;
@@ -14,6 +14,7 @@ interface NumberedSaleRow {
 }
 
 export async function GET() {
+  await ensureDbInitialized();
   try {
     const result = await db.query(
       `SELECT id, date, service_name, patient_name, gross_price, owner_cut, selling_price, profit,
