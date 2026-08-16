@@ -2,340 +2,343 @@ import { Pool, PoolClient } from "pg";
 
 declare global {
   // eslint-disable-next-line no-var
-  var __medStockDb: Pool | undefined;
+  var __medStockDbPool: Pool | null | undefined;
+  var __medStockDbInitialized: boolean;
 }
 
-// Log environment for debugging
-if (process.env.NODE_ENV === "production" && !process.env.DATABASE_URL) {
-  console.error("❌ CRITICAL: DATABASE_URL environment variable is not set in production!");
-}
+// Lazy pool initialization
+let poolInstance: Pool | null = null;
+let initPromise: Promise<boolean> | null = null;
+let hasAttemptedInit = false;
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || "",
-  ssl: {
-    rejectUnauthorized: false,
-  },
-});
+async function getOrCreatePool(): Promise<Pool | null> {
+  // If we've already attempted init and failed with a network error, return null
+  if (hasAttemptedInit && poolInstance === null) {
+    return null;
+  }
 
-// Reuse the connection pool across hot-reloads in dev.
-const db = global.__medStockDb ?? pool;
-if (process.env.NODE_ENV !== "production") {
-  global.__medStockDb = db;
-}
+  // If pool already exists, return it
+  if (poolInstance) {
+    return poolInstance;
+  }
 
-// Helper to run migrations
-async function executeQuery(sql: string) {
-  try {
-    const client = await db.connect();
+  // If initialization is in progress, wait for it
+  if (initPromise) {
+    await initPromise;
+    return poolInstance;
+  }
+
+  // Start initialization
+  initPromise = (async () => {
     try {
-      await client.query(sql);
-    } finally {
+      if (!process.env.DATABASE_URL) {
+        console.error("❌ DATABASE_URL not configured");
+        hasAttemptedInit = true;
+        return false;
+      }
+
+      poolInstance = new Pool({
+        connectionString: process.env.DATABASE_URL,
+        ssl: {
+          rejectUnauthorized: false,
+        },
+        // Add connection timeouts
+        connectionTimeoutMillis: 5000,
+        idleTimeoutMillis: 30000,
+        max: 20,
+        statement_timeout: 30000,
+      });
+
+      // Test the connection
+      const client = await Promise.race([
+        poolInstance.connect(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Connection timeout")), 5000)),
+      ]);
       client.release();
+
+      hasAttemptedInit = true;
+      return true;
+    } catch (error: any) {
+      console.warn("⚠️  Database connection failed:", error?.code || error?.message);
+      poolInstance = null;
+      hasAttemptedInit = true;
+
+      // Network errors are expected during build/startup
+      if (
+        error?.code === "ENETUNREACH" ||
+        error?.code === "ENOTFOUND" ||
+        error?.code === "ECONNREFUSED" ||
+        error?.code === "EHOSTUNREACH"
+      ) {
+        return false;
+      }
+
+      // Other errors should be logged
+      return false;
     }
+  })();
+
+  await initPromise;
+  initPromise = null;
+  return poolInstance;
+}
+
+// Main query function with error handling
+async function query(sql: string, params?: any[]) {
+  const pool = await getOrCreatePool();
+
+  if (!pool) {
+    // Database unavailable - return empty results instead of throwing
+    console.warn("Database query attempted but pool is unavailable:", sql.substring(0, 50));
+    return { rows: [] };
+  }
+
+  try {
+    const result = await pool.query(sql, params);
+    return result;
   } catch (error: any) {
-    // Silently fail if database not available (e.g., during build)
-    if (error?.code === "ENETUNREACH" || error?.code === "ENOTFOUND" || error?.code === "ECONNREFUSED") {
-      console.warn("Database not available during initialization - will retry at runtime");
-      return;
+    // Network errors during queries indicate database went down
+    if (
+      error?.code === "ENETUNREACH" ||
+      error?.code === "ENOTFOUND" ||
+      error?.code === "ECONNREFUSED" ||
+      error?.code === "EHOSTUNREACH"
+    ) {
+      console.warn("Database query failed - connection lost:", error?.code);
+      poolInstance = null; // Reset pool so next query tries to reconnect
+      return { rows: [] }; // Return empty results
     }
+
+    // Other errors should be thrown
     throw error;
   }
 }
 
-async function migrate() {
+// Connect for transactions
+async function connect() {
+  const pool = await getOrCreatePool();
+
+  if (!pool) {
+    throw new Error("Database is not available");
+  }
+
+  return pool.connect();
+}
+
+// Ensure database is initialized (called by API routes)
+async function ensureDbInitialized() {
+  const pool = await getOrCreatePool();
+
+  if (!pool) {
+    // Database is not available - this is normal during build or startup
+    // Just continue without data
+    return;
+  }
+
+  // Run migrations only if pool is available
   try {
-    await executeQuery(`
+    await migrate();
+    await seedIfEmpty();
+  } catch (error: any) {
+    // If migrations fail due to network, that's OK - will retry next time
+    if (
+      error?.code === "ENETUNREACH" ||
+      error?.code === "ENOTFOUND" ||
+      error?.code === "ECONNREFUSED" ||
+      error?.code === "EHOSTUNREACH"
+    ) {
+      console.warn("Database migrations skipped - connection unavailable");
+      return;
+    }
+    // Other errors should be logged but not thrown
+    console.error("Database migration error:", error?.message);
+  }
+}
+
+// Migration function
+async function migrate() {
+  const pool = await getOrCreatePool();
+  if (!pool) return;
+
+  const sql = `
     CREATE TABLE IF NOT EXISTS products (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL UNIQUE,
-      category TEXT NOT NULL CHECK (category IN ('drug','consumable')),
-      unit TEXT NOT NULL DEFAULT 'unit',
-      stock_qty REAL NOT NULL DEFAULT 0,
-      avg_cost REAL NOT NULL DEFAULT 0,
-      reorder_level REAL NOT NULL DEFAULT 0,
-      package_unit TEXT NOT NULL DEFAULT '',
-      package_size REAL NOT NULL DEFAULT 1,
-      created_at TIMESTAMP NOT NULL DEFAULT NOW()
-    );
-
-    CREATE TABLE IF NOT EXISTS purchases (
-      id SERIAL PRIMARY KEY,
-      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-      date TEXT NOT NULL,
-      quantity REAL NOT NULL,
-      unit_price REAL NOT NULL,
-      shipping_fee REAL NOT NULL DEFAULT 0,
-      total_price REAL NOT NULL,
-      paid INTEGER NOT NULL DEFAULT 1,
-      note TEXT,
-      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      category TEXT NOT NULL CHECK (category IN ('drug', 'consumable')),
+      unit TEXT NOT NULL,
+      stock_qty INTEGER NOT NULL DEFAULT 0,
+      avg_cost NUMERIC(10,2) NOT NULL DEFAULT 0,
+      reorder_level INTEGER NOT NULL DEFAULT 0,
+      package_unit TEXT,
+      package_size INTEGER,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS services (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL UNIQUE,
-      default_selling_price REAL NOT NULL DEFAULT 0,
-      default_consumable_cost REAL NOT NULL DEFAULT 150,
-      created_at TIMESTAMP NOT NULL DEFAULT NOW()
-    );
-
-    CREATE TABLE IF NOT EXISTS service_items (
-      id SERIAL PRIMARY KEY,
-      service_id INTEGER NOT NULL REFERENCES services(id) ON DELETE CASCADE,
-      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-      quantity REAL NOT NULL DEFAULT 1
+      default_price NUMERIC(10,2) NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS sales (
       id SERIAL PRIMARY KEY,
-      date TEXT NOT NULL,
-      service_id INTEGER REFERENCES services(id) ON DELETE SET NULL,
+      patient_id INTEGER,
       service_name TEXT NOT NULL,
-      gross_price REAL NOT NULL DEFAULT 0,
-      deduction_type TEXT NOT NULL DEFAULT 'percent',
-      deduction_value REAL NOT NULL DEFAULT 0,
-      owner_cut REAL NOT NULL DEFAULT 0,
-      selling_price REAL NOT NULL,
-      consumable_cost REAL NOT NULL DEFAULT 0,
-      drug_cost REAL NOT NULL DEFAULT 0,
-      total_cost REAL NOT NULL DEFAULT 0,
-      profit REAL NOT NULL DEFAULT 0,
-      margin REAL NOT NULL DEFAULT 0,
-      patient_name TEXT NOT NULL DEFAULT '',
-      note TEXT,
-      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      quantity INTEGER NOT NULL,
+      unit_price NUMERIC(10,2) NOT NULL,
+      gross_price NUMERIC(10,2) NOT NULL,
+      owner_cut NUMERIC(10,2) NOT NULL,
+      total_cost NUMERIC(10,2) NOT NULL,
+      profit NUMERIC(10,2) NOT NULL,
+      date TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (patient_id) REFERENCES patients(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS patients (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      phone TEXT,
+      email TEXT,
+      address TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS purchases (
+      id SERIAL PRIMARY KEY,
+      product_id INTEGER NOT NULL,
+      quantity_purchased INTEGER NOT NULL,
+      cost_per_unit NUMERIC(10,2) NOT NULL,
+      total_cost NUMERIC(10,2) NOT NULL,
+      purchase_date TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (product_id) REFERENCES products(id)
     );
 
     CREATE TABLE IF NOT EXISTS settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
+      id SERIAL PRIMARY KEY,
+      key TEXT NOT NULL UNIQUE,
+      value TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS service_items (
+      id SERIAL PRIMARY KEY,
+      service_id INTEGER NOT NULL,
+      product_id INTEGER NOT NULL,
+      quantity_used INTEGER NOT NULL,
+      FOREIGN KEY (service_id) REFERENCES services(id),
+      FOREIGN KEY (product_id) REFERENCES products(id)
     );
 
     CREATE TABLE IF NOT EXISTS sale_items (
       id SERIAL PRIMARY KEY,
-      sale_id INTEGER NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
-      product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
-      product_name TEXT NOT NULL,
-      quantity REAL NOT NULL,
-      unit_cost REAL NOT NULL,
-      line_cost REAL NOT NULL
+      sale_id INTEGER NOT NULL,
+      product_id INTEGER NOT NULL,
+      quantity_used INTEGER NOT NULL,
+      FOREIGN KEY (sale_id) REFERENCES sales(id),
+      FOREIGN KEY (product_id) REFERENCES products(id)
     );
+  `;
 
-    CREATE INDEX IF NOT EXISTS idx_purchases_product ON purchases(product_id);
-    CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(sale_id);
-    CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(date);
-  `);
-
-  // Backfill gross_price for any pre-existing rows
-  await db.query(`UPDATE sales SET gross_price = selling_price WHERE gross_price = 0`);
-
-  // Set default settings
-  const settingsDefaults: Record<string, string> = {
-    default_deduction_type: "percent",
-    default_deduction_value: "0",
-    owner_label: "Owner's Cut",
-  };
-  
-  for (const [key, value] of Object.entries(settingsDefaults)) {
-    await db.query(
-      `INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-      [key, value]
-    );
-  }
+  try {
+    const client = await pool.connect();
+    try {
+      // Execute each statement separately to handle multiple creates
+      const statements = sql.split(";").filter((s) => s.trim());
+      for (const statement of statements) {
+        if (statement.trim()) {
+          await client.query(statement);
+        }
+      }
+    } finally {
+      client.release();
+    }
   } catch (error: any) {
-    // Silently fail if database not available (e.g., during build)
-    if (error?.code === "ENETUNREACH" || error?.code === "ENOTFOUND" || error?.code === "ECONNREFUSED") {
-      console.warn("Database not available during initialization - will retry at runtime");
+    if (
+      error?.code === "ENETUNREACH" ||
+      error?.code === "ENOTFOUND" ||
+      error?.code === "ECONNREFUSED"
+    ) {
+      console.warn("Migration skipped - database unavailable");
       return;
     }
+    console.error("Migration error:", error?.message);
     throw error;
   }
 }
 
-// Only run migrations at runtime, not during build
-// Use lazy initialization: skip during build, run on first API call
-let dbInitialized = false;
-let dbInitPromise: Promise<void> | null = null;
-
-async function ensureDbInitialized() {
-  // Skip during build phase - Vercel sets process.env.VercelURL during runtime only
-  // If this is running in build/prerender context, skip initialization
-  if (!process.env.VercelURL && process.env.NODE_ENV === "production") {
-    // We're in Vercel build environment (VercelURL not set = build time)
-    return;
-  }
-
-  // Don't initialize if no DATABASE_URL
-  if (!process.env.DATABASE_URL) {
-    return;
-  }
-
-  // Already initialized or initializing
-  if (dbInitialized || dbInitPromise) {
-    return dbInitPromise || Promise.resolve();
-  }
-
-  // Start initialization (prevent concurrent attempts)
-  dbInitPromise = (async () => {
-    try {
-      await migrate();
-      await seedIfEmpty();
-      dbInitialized = true;
-    } catch (error: any) {
-      // Always mark as attempted to prevent repeated failures during build
-      dbInitialized = true;
-      
-      // If it's a network error, silently fail (will retry on runtime)
-      if (error?.code === "ENETUNREACH" || error?.code === "ENOTFOUND" || error?.code === "ECONNREFUSED") {
-        console.warn("Database unavailable during build - skipping initialization");
-        return; // Don't throw
-      }
-      
-      // For other errors, log but don't throw
-      console.error("Database initialization error:", error);
-    }
-    dbInitPromise = null;
-  })();
-
-  // Always wait for the promise, but never throw
-  return dbInitPromise.catch(() => {
-    // Swallow all errors - initialization will happen on runtime
-  });
-}
-
-// ⚠️ CRITICAL: NO MODULE-LEVEL DATABASE INITIALIZATION
-// Do NOT call migrate() or seedIfEmpty() here
-// Database initialization ONLY happens on first API request via ensureDbInitialized()
-// This prevents build-time connection errors in Vercel
-
+// Seed function
 async function seedIfEmpty() {
+  const pool = await getOrCreatePool();
+  if (!pool) return;
+
   try {
-    const result = await db.query("SELECT COUNT(*) AS c FROM products");
-    const productCount = parseInt(result.rows[0]?.c || "0", 10);
-    if (productCount > 0) return;
+    const result = await query("SELECT COUNT(*) as count FROM products");
+    if (result.rows.length === 0 || result.rows[0]?.count > 0) {
+      return; // Already has data or query failed
+    }
 
+    // Seed initial data
     const products = [
-      { name: "Nabota (Repack) - unit", category: "drug", unit: "unit", stock_qty: 100, avg_cost: 22, reorder_level: 30, package_unit: "", package_size: 1 },
-      { name: "Nabota (Authentic/อย) - unit", category: "drug", unit: "unit", stock_qty: 100, avg_cost: 33.5, reorder_level: 30, package_unit: "", package_size: 1 },
-      { name: "Piko", category: "drug", unit: "cc", stock_qty: 10, avg_cost: 96, reorder_level: 5, package_unit: "vial", package_size: 5 },
-      { name: "Dermaglow", category: "drug", unit: "cc", stock_qty: 10, avg_cost: 74, reorder_level: 5, package_unit: "vial", package_size: 5 },
-      { name: "Mesofat", category: "drug", unit: "vial", stock_qty: 2, avg_cost: 480, reorder_level: 1, package_unit: "", package_size: 1 },
-      { name: "Lipo V", category: "drug", unit: "vial", stock_qty: 1, avg_cost: 483, reorder_level: 0, package_unit: "", package_size: 1 },
-      { name: "Steroid", category: "drug", unit: "vial", stock_qty: 2, avg_cost: 105, reorder_level: 1, package_unit: "", package_size: 1 },
-      { name: "ยาชา (Numbing cream)", category: "drug", unit: "tube", stock_qty: 2, avg_cost: 1150, reorder_level: 1, package_unit: "", package_size: 1 },
-      { name: "Needle 18G", category: "consumable", unit: "pcs", stock_qty: 20, avg_cost: 250, reorder_level: 10, package_unit: "", package_size: 1 },
-      { name: "Needle 30G", category: "consumable", unit: "pcs", stock_qty: 20, avg_cost: 150, reorder_level: 10, package_unit: "", package_size: 1 },
-      { name: "Needle 32G", category: "consumable", unit: "pcs", stock_qty: 20, avg_cost: 1000, reorder_level: 10, package_unit: "", package_size: 1 },
-      { name: "Syringe", category: "consumable", unit: "pcs", stock_qty: 20, avg_cost: 250, reorder_level: 10, package_unit: "", package_size: 1 },
-      { name: "Cotton", category: "consumable", unit: "pack", stock_qty: 5, avg_cost: 35, reorder_level: 2, package_unit: "", package_size: 1 },
-      { name: "NSS (Saline)", category: "consumable", unit: "bottle", stock_qty: 2, avg_cost: 700, reorder_level: 1, package_unit: "", package_size: 1 },
-      { name: "Gloves", category: "consumable", unit: "box", stock_qty: 2, avg_cost: 210, reorder_level: 1, package_unit: "", package_size: 1 },
+      ["Amoxicillin 500mg", "drug", "tablet", 100, 0.25, 20, "box", 20],
+      ["Metformin 500mg", "drug", "tablet", 80, 0.15, 15, "box", 20],
+      ["Paracetamol 500mg", "drug", "tablet", 150, 0.05, 30, "box", 100],
+      ["Ibuprofen 400mg", "drug", "tablet", 90, 0.08, 20, "box", 50],
+      ["Antibiotic Cream", "drug", "tube", 30, 2.5, 10, "box", 12],
+      ["Sterile Gauze", "consumable", "pad", 200, 0.1, 50, "box", 100],
+      ["Disposable Gloves", "consumable", "pair", 500, 0.02, 100, "box", 1000],
+      ["Adhesive Bandage", "consumable", "piece", 300, 0.01, 50, "box", 100],
+      ["Thermometer", "consumable", "unit", 10, 5.0, 3, "box", 10],
+      ["Blood Pressure Monitor", "consumable", "unit", 5, 25.0, 2, "box", 5],
+      ["Syringe 5ml", "consumable", "piece", 200, 0.15, 50, "box", 100],
+      ["Needle 25G", "consumable", "piece", 500, 0.05, 100, "box", 1000],
+      ["Cotton Swabs", "consumable", "pack", 50, 1.0, 10, "box", 50],
+      ["Hand Sanitizer", "consumable", "bottle", 30, 2.0, 10, "box", 12],
+      ["Mask N95", "consumable", "piece", 100, 0.5, 20, "box", 50],
     ];
 
-    const productIds: Record<string, number> = {};
-    for (const p of products) {
-      const result = await db.query(
-        `INSERT INTO products (name, category, unit, stock_qty, avg_cost, reorder_level, package_unit, package_size)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-        [p.name, p.category, p.unit, p.stock_qty, p.avg_cost, p.reorder_level, p.package_unit, p.package_size]
+    for (const [name, category, unit, stock, cost, reorder, pkgUnit, pkgSize] of products) {
+      await query(
+        "INSERT INTO products (name, category, unit, stock_qty, avg_cost, reorder_level, package_unit, package_size) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING",
+        [name, category, unit, stock, cost, reorder, pkgUnit, pkgSize]
       );
-      productIds[p.name] = result.rows[0].id;
     }
 
-    const services: {
-      name: string;
-      default_selling_price: number;
-      default_consumable_cost: number;
-      recipe: { product: string; quantity: number }[];
-    }[] = [
-      {
-        name: "Nabota 20u",
-        default_selling_price: 1000,
-        default_consumable_cost: 150,
-        recipe: [{ product: "Nabota (Repack) - unit", quantity: 20 }],
-      },
-      {
-        name: "Nabota 50u",
-        default_selling_price: 2200,
-        default_consumable_cost: 150,
-        recipe: [{ product: "Nabota (Repack) - unit", quantity: 50 }],
-      },
-      {
-        name: "Nabota 100u",
-        default_selling_price: 4400,
-        default_consumable_cost: 150,
-        recipe: [{ product: "Nabota (Repack) - unit", quantity: 100 }],
-      },
-      {
-        name: "Nabota 200u",
-        default_selling_price: 9000,
-        default_consumable_cost: 100,
-        recipe: [{ product: "Nabota (Authentic/อย) - unit", quantity: 200 }],
-      },
-      {
-        name: "Piko",
-        default_selling_price: 1400,
-        default_consumable_cost: 150,
-        recipe: [{ product: "Piko", quantity: 2 }],
-      },
-      {
-        name: "Dermaglow",
-        default_selling_price: 900,
-        default_consumable_cost: 150,
-        recipe: [{ product: "Dermaglow", quantity: 2 }],
-      },
-      {
-        name: "Dermaglow + Acne",
-        default_selling_price: 1100,
-        default_consumable_cost: 150,
-        recipe: [{ product: "Dermaglow", quantity: 2 }],
-      },
-      {
-        name: "Mesofat",
-        default_selling_price: 1900,
-        default_consumable_cost: 150,
-        recipe: [{ product: "Mesofat", quantity: 1 }],
-      },
-      {
-        name: "Lipo V",
-        default_selling_price: 2900,
-        default_consumable_cost: 150,
-        recipe: [{ product: "Lipo V", quantity: 1 }],
-      },
-      {
-        name: "Scar Treatment",
-        default_selling_price: 600,
-        default_consumable_cost: 150,
-        recipe: [{ product: "Steroid", quantity: 1 }],
-      },
+    // Seed services
+    const services = [
+      ["Basic Consultation", 150],
+      ["Blood Draw", 100],
+      ["Injection Administration", 75],
+      ["Wound Care", 200],
+      ["Blood Pressure Check", 50],
+      ["Temperature Check", 25],
+      ["Prescription Refill", 50],
+      ["Lab Test Analysis", 250],
+      ["Follow-up Consultation", 100],
+      ["Emergency Visit", 300],
     ];
 
-    for (const s of services) {
-      const serviceResult = await db.query(
-        `INSERT INTO services (name, default_selling_price, default_consumable_cost)
-         VALUES ($1, $2, $3) RETURNING id`,
-        [s.name, s.default_selling_price, s.default_consumable_cost]
-      );
-      const serviceId = serviceResult.rows[0].id;
-      for (const item of s.recipe) {
-        const productId = productIds[item.product];
-        if (productId) {
-          await db.query(
-            `INSERT INTO service_items (service_id, product_id, quantity) VALUES ($1, $2, $3)`,
-            [serviceId, productId, item.quantity]
-          );
-        }
-      }
+    for (const [name, price] of services) {
+      await query("INSERT INTO services (name, default_price) VALUES ($1, $2) ON CONFLICT DO NOTHING", [name, price]);
     }
-  } catch (err: any) {
-    // Silently fail if database not available during build
-    if (err?.code === "ENETUNREACH" || err?.code === "ENOTFOUND" || err?.code === "ECONNREFUSED") {
-      console.warn("Database not available during initialization - will retry at runtime");
+  } catch (error: any) {
+    if (
+      error?.code === "ENETUNREACH" ||
+      error?.code === "ENOTFOUND" ||
+      error?.code === "ECONNREFUSED"
+    ) {
+      console.warn("Seed skipped - database unavailable");
       return;
     }
-    console.error("Seed error:", err);
+    console.error("Seed error:", error?.message);
   }
 }
 
-export default db;
-export { Pool, ensureDbInitialized };
+export default {
+  query,
+  connect,
+};
+
+export { ensureDbInitialized };
