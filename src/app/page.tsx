@@ -1,69 +1,181 @@
-import Image from "next/image";
+import Link from "next/link";
+import db from "@/lib/db";
+import { Product, Sale } from "@/lib/types";
+import { Card, StatCard } from "@/components/Card";
+import RevenueChart, { MonthlyRow } from "@/components/RevenueChart";
+import { formatCurrency, formatNumber, formatPercent } from "@/lib/format";
 
-export default function Home() {
+export const dynamic = "force-dynamic";
+
+export default function DashboardPage() {
+  const monthly = db
+    .prepare(
+      `SELECT strftime('%Y-%m', date) AS month,
+              SUM(gross_price) AS revenue,
+              SUM(owner_cut) AS ownerCut,
+              SUM(total_cost) AS cost,
+              SUM(profit) AS profit,
+              COUNT(*) AS sessions
+       FROM sales GROUP BY month ORDER BY month ASC`
+    )
+    .all() as MonthlyRow[];
+
+  const totals = db
+    .prepare(
+      `SELECT SUM(gross_price) AS revenue, SUM(owner_cut) AS ownerCut, SUM(total_cost) AS cost, SUM(profit) AS profit, COUNT(*) AS sessions
+       FROM sales`
+    )
+    .get() as {
+    revenue: number | null;
+    ownerCut: number | null;
+    cost: number | null;
+    profit: number | null;
+    sessions: number;
+  };
+
+  const revenue = totals.revenue || 0;
+  const ownerCut = totals.ownerCut || 0;
+  const cost = totals.cost || 0;
+  const profit = totals.profit || 0;
+  const margin = revenue > 0 ? profit / revenue : 0;
+
+  const lowStock = db
+    .prepare(`SELECT * FROM products WHERE stock_qty <= reorder_level ORDER BY stock_qty ASC`)
+    .all() as Product[];
+
+  const recentSales = db
+    .prepare(`SELECT * FROM sales ORDER BY date DESC, id DESC LIMIT 6`)
+    .all() as Sale[];
+
+  const topServices = db
+    .prepare(
+      `SELECT service_name, COUNT(*) AS count, SUM(profit) AS profit, SUM(gross_price) AS revenue
+       FROM sales GROUP BY service_name ORDER BY revenue DESC LIMIT 6`
+    )
+    .all() as { service_name: string; count: number; profit: number; revenue: number }[];
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-slate-800">Dashboard</h1>
+          <p className="text-sm text-slate-500">Overview of your clinic&apos;s stock and margins.</p>
+        </div>
+        <Link
+          href="/sales/new"
+          className="bg-rose-500 hover:bg-rose-600 text-white text-sm font-medium px-4 py-2 rounded-md transition-colors"
+        >
+          + Log a Sale
+        </Link>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+        <StatCard label="Gross Revenue" value={formatCurrency(revenue)} sub={`${totals.sessions} sessions (client paid)`} />
+        <StatCard label="Owner's Cut" value={formatCurrency(ownerCut)} sub="Paid out before your costs" />
+        <StatCard label="Drug + Consumable Cost" value={formatCurrency(cost)} />
+        <StatCard
+          label="Your Actual Earnings"
+          value={formatCurrency(profit)}
+          tone={profit >= 0 ? "positive" : "negative"}
+          sub={`${formatPercent(margin)} of gross`}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+      </div>
+
+      <Card title="Monthly Revenue, Cost & Profit">
+        <RevenueChart data={monthly} />
+      </Card>
+
+      <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
+        <Card
+          title="Low Stock Alerts"
+          action={
+            <Link href="/stock" className="text-xs text-rose-500 font-medium hover:underline">
+              Manage stock
+            </Link>
+          }
+        >
+          {lowStock.length === 0 ? (
+            <p className="text-sm text-slate-400">All stock levels look healthy.</p>
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {lowStock.map((p) => (
+                <li key={p.id} className="py-2 flex items-center justify-between text-sm">
+                  <span className="font-medium text-slate-700">{p.name}</span>
+                  <span className="text-rose-500 font-semibold">
+                    {formatNumber(p.stock_qty)} {p.unit} left
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+
+        <Card title="Top Services by Revenue">
+          {topServices.length === 0 ? (
+            <p className="text-sm text-slate-400">No sales recorded yet.</p>
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {topServices.map((s) => (
+                <li key={s.service_name} className="py-2 flex items-center justify-between text-sm">
+                  <span className="font-medium text-slate-700">
+                    {s.service_name}{" "}
+                    <span className="text-slate-400 font-normal">×{s.count}</span>
+                  </span>
+                  <span className="text-emerald-600 font-semibold">{formatCurrency(s.revenue)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
+
+      <Card
+        title="Recent Sales"
+        action={
+          <Link href="/sales" className="text-xs text-rose-500 font-medium hover:underline">
+            View all
+          </Link>
+        }
+      >
+        {recentSales.length === 0 ? (
+          <p className="text-sm text-slate-400">No sales recorded yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-slate-400 text-xs uppercase">
+                  <th className="py-2 pr-4">Date</th>
+                  <th className="py-2 pr-4">Service</th>
+                  <th className="py-2 pr-4">Client Paid</th>
+                  <th className="py-2 pr-4">Owner&apos;s Cut</th>
+                  <th className="py-2 pr-4">Total Cost</th>
+                  <th className="py-2 pr-4">Your Earning</th>
+                  <th className="py-2">Margin</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentSales.map((s) => (
+                  <tr key={s.id} className="border-t border-slate-100">
+                    <td className="py-2 pr-4 text-slate-500">{s.date}</td>
+                    <td className="py-2 pr-4 font-medium text-slate-700">{s.service_name}</td>
+                    <td className="py-2 pr-4">{formatCurrency(s.gross_price)}</td>
+                    <td className="py-2 pr-4">{formatCurrency(s.owner_cut)}</td>
+                    <td className="py-2 pr-4">{formatCurrency(s.total_cost)}</td>
+                    <td
+                      className={`py-2 pr-4 font-medium ${
+                        s.profit >= 0 ? "text-emerald-600" : "text-rose-600"
+                      }`}
+                    >
+                      {formatCurrency(s.profit)}
+                    </td>
+                    <td className="py-2">{formatPercent(s.margin)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
     </div>
   );
 }
