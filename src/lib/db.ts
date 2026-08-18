@@ -134,14 +134,18 @@ async function ensureDbInitialized() {
 
   if (!pool) {
     // Database is not available - this is normal during build or startup
-    // Just continue without data
+    console.warn("ensureDbInitialized: pool not available");
     return;
   }
 
+  console.log("ensureDbInitialized: running migrations...");
+  
   // Run migrations only if pool is available
   try {
     await migrate();
+    console.log("ensureDbInitialized: migrations completed");
     await seedIfEmpty();
+    console.log("ensureDbInitialized: seeding completed");
   } catch (error: any) {
     // If migrations fail due to network, that's OK - will retry next time
     if (
@@ -155,14 +159,19 @@ async function ensureDbInitialized() {
     }
     // Other errors should be logged but not thrown
     console.error("Database migration error:", error?.message);
+    throw error;
   }
 }
 
 // Migration function
 async function migrate() {
   const pool = await getOrCreatePool();
-  if (!pool) return;
+  if (!pool) {
+    console.warn("migrate: pool not available");
+    return;
+  }
 
+  console.log("migrate: starting...");
   const sql = `
     CREATE TABLE IF NOT EXISTS products (
       id SERIAL PRIMARY KEY,
@@ -250,11 +259,13 @@ async function migrate() {
     try {
       // Execute each statement separately to handle multiple creates
       const statements = sql.split(";").filter((s) => s.trim());
+      console.log(`migrate: executing ${statements.length} statements`);
       for (const statement of statements) {
         if (statement.trim()) {
           await client.query(statement);
         }
       }
+      console.log("migrate: all tables created successfully");
     } finally {
       client.release();
     }
@@ -267,7 +278,7 @@ async function migrate() {
       console.warn("Migration skipped - database unavailable");
       return;
     }
-    console.error("Migration error:", error?.message);
+    console.error("Migration error:", error?.message, error?.code);
     throw error;
   }
 }
