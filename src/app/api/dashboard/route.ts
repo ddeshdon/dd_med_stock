@@ -51,8 +51,17 @@ export async function GET() {
       lowStock: lowStockResult.rows as Product[],
       recentSales: recentSalesResult.rows,
     });
-  } catch (error) {
-    console.error("GET dashboard error:", error);
-    return NextResponse.json({ error: "Database error" }, { status: 500 });
+  } catch (error: any) {
+    console.error("GET dashboard error:", error?.message || error, error?.code);
+    
+    // Return graceful empty response instead of 500 error
+    return NextResponse.json({
+      monthly: [],
+      totals: { revenue: 0, owner_cut: 0, cost: 0, profit: 0, sessions: 0 },
+      topServices: [],
+      lowStock: [],
+      recentSales: [],
+      warning: "Database unavailable - showing empty results"
+    });
   }
 }

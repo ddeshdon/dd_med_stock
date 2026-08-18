@@ -59,7 +59,10 @@ async function getOrCreatePool(): Promise<Pool | null> {
       hasAttemptedInit = true;
       return true;
     } catch (error: any) {
-      console.warn("⚠️  Database connection failed:", error?.code || error?.message);
+      console.warn("⚠️  Database connection failed:");
+      console.warn("  Error Code:", error?.code);
+      console.warn("  Error Message:", error?.message);
+      console.warn("  Error:", error);
       poolInstance = null;
       hasAttemptedInit = true;
 
