@@ -327,52 +327,75 @@ async function seedIfEmpty() {
 
   try {
     const result = await query("SELECT COUNT(*) as count FROM products");
-    if (result.rows.length === 0 || result.rows[0]?.count > 0) {
-      return; // Already has data or query failed
+    const productsExist = result.rows.length > 0 && result.rows[0]?.count > 0;
+
+    if (!productsExist) {
+      // Seed initial products if empty
+      const products = [
+        ["Amoxicillin 500mg", "drug", "tablet", 100, 0.25, 20, "box", 20],
+        ["Metformin 500mg", "drug", "tablet", 80, 0.15, 15, "box", 20],
+        ["Paracetamol 500mg", "drug", "tablet", 150, 0.05, 30, "box", 100],
+        ["Ibuprofen 400mg", "drug", "tablet", 90, 0.08, 20, "box", 50],
+        ["Antibiotic Cream", "drug", "tube", 30, 2.5, 10, "box", 12],
+        ["Sterile Gauze", "consumable", "pad", 200, 0.1, 50, "box", 100],
+        ["Disposable Gloves", "consumable", "pair", 500, 0.02, 100, "box", 1000],
+        ["Adhesive Bandage", "consumable", "piece", 300, 0.01, 50, "box", 100],
+        ["Thermometer", "consumable", "unit", 10, 5.0, 3, "box", 10],
+        ["Blood Pressure Monitor", "consumable", "unit", 5, 25.0, 2, "box", 5],
+        ["Syringe 5ml", "consumable", "piece", 200, 0.15, 50, "box", 100],
+        ["Needle 25G", "consumable", "piece", 500, 0.05, 100, "box", 1000],
+        ["Cotton Swabs", "consumable", "pack", 50, 1.0, 10, "box", 50],
+        ["Hand Sanitizer", "consumable", "bottle", 30, 2.0, 10, "box", 12],
+        ["Mask N95", "consumable", "piece", 100, 0.5, 20, "box", 50],
+      ];
+
+      for (const [name, category, unit, stock, cost, reorder, pkgUnit, pkgSize] of products) {
+        await query(
+          "INSERT INTO products (name, category, unit, stock_qty, avg_cost, reorder_level, package_unit, package_size) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING",
+          [name, category, unit, stock, cost, reorder, pkgUnit, pkgSize]
+        );
+      }
     }
 
-    // Seed initial data
-    const products = [
-      ["Amoxicillin 500mg", "drug", "tablet", 100, 0.25, 20, "box", 20],
-      ["Metformin 500mg", "drug", "tablet", 80, 0.15, 15, "box", 20],
-      ["Paracetamol 500mg", "drug", "tablet", 150, 0.05, 30, "box", 100],
-      ["Ibuprofen 400mg", "drug", "tablet", 90, 0.08, 20, "box", 50],
-      ["Antibiotic Cream", "drug", "tube", 30, 2.5, 10, "box", 12],
-      ["Sterile Gauze", "consumable", "pad", 200, 0.1, 50, "box", 100],
-      ["Disposable Gloves", "consumable", "pair", 500, 0.02, 100, "box", 1000],
-      ["Adhesive Bandage", "consumable", "piece", 300, 0.01, 50, "box", 100],
-      ["Thermometer", "consumable", "unit", 10, 5.0, 3, "box", 10],
-      ["Blood Pressure Monitor", "consumable", "unit", 5, 25.0, 2, "box", 5],
-      ["Syringe 5ml", "consumable", "piece", 200, 0.15, 50, "box", 100],
-      ["Needle 25G", "consumable", "piece", 500, 0.05, 100, "box", 1000],
-      ["Cotton Swabs", "consumable", "pack", 50, 1.0, 10, "box", 50],
-      ["Hand Sanitizer", "consumable", "bottle", 30, 2.0, 10, "box", 12],
-      ["Mask N95", "consumable", "piece", 100, 0.5, 20, "box", 50],
+    // Always seed services (they may be empty even if products exist)
+    // First, delete old services
+    const oldServiceNames = [
+      "Basic Consultation",
+      "Blood Draw",
+      "Injection Administration",
+      "Wound Care",
+      "Blood Pressure Check",
+      "Temperature Check",
+      "Prescription Refill",
+      "Lab Test Analysis",
+      "Follow-up Consultation",
+      "Emergency Visit",
     ];
-
-    for (const [name, category, unit, stock, cost, reorder, pkgUnit, pkgSize] of products) {
-      await query(
-        "INSERT INTO products (name, category, unit, stock_qty, avg_cost, reorder_level, package_unit, package_size) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING",
-        [name, category, unit, stock, cost, reorder, pkgUnit, pkgSize]
-      );
+    
+    for (const serviceName of oldServiceNames) {
+      await query("DELETE FROM services WHERE name = $1", [serviceName]);
     }
 
-    // Seed services
     const services = [
-      ["Basic Consultation", 150],
-      ["Blood Draw", 100],
-      ["Injection Administration", 75],
-      ["Wound Care", 200],
-      ["Blood Pressure Check", 50],
-      ["Temperature Check", 25],
-      ["Prescription Refill", 50],
-      ["Lab Test Analysis", 250],
-      ["Follow-up Consultation", 100],
-      ["Emergency Visit", 300],
+      ["20 u", 1000, 150],
+      ["dermaglow", 900, 150],
+      ["dermaglow + acne", 1100, 150],
+      ["dermglow", 900, 150],
+      ["mesofat", 900, 150],
+      ["nabota 50 อย", 2200, 150],
+      ["nabota 50 repack", 1900, 150],
+      ["nabota 100 อย", 4500, 150],
+      ["nabota 100 repack", 4400, 150],
+      ["nabota 200 อย", 9000, 150],
+      ["piko", 3000, 150],
+      ["scar", 600, 150],
     ];
 
-    for (const [name, price] of services) {
-      await query("INSERT INTO services (name, default_price) VALUES ($1, $2) ON CONFLICT DO NOTHING", [name, price]);
+    for (const [name, sellingPrice, consumableCost] of services) {
+      await query(
+        "INSERT INTO services (name, default_price, default_selling_price, default_consumable_cost) VALUES ($1, $2, $3, $4) ON CONFLICT (name) DO UPDATE SET default_price = $2, default_selling_price = $3, default_consumable_cost = $4",
+        [name, sellingPrice, sellingPrice, consumableCost]
+      );
     }
   } catch (error: any) {
     if (
