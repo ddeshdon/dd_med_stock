@@ -134,7 +134,7 @@ export default function ServicesPage() {
           <p className="text-sm text-slate-400">No services yet.</p>
         </Card>
       ) : (
-        <div className="grid md:grid-cols-2 gap-4">
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
           {services.map((s) => {
             const drugCost = estimatedDrugCost(s.items);
             const totalCost = drugCost + s.default_consumable_cost;
@@ -145,61 +145,63 @@ export default function ServicesPage() {
             const netPrice = s.default_selling_price - ownerCut;
             const profit = netPrice - totalCost;
             return (
-              <Card key={s.id}>
-                <div className="flex items-start justify-between">
-                  <div>
-                    <h3 className="font-semibold text-slate-800">{s.name}</h3>
-                    <p className="text-xs text-slate-400 mt-0.5">
-                      Client price {formatCurrency(s.default_selling_price)}
+              <Card key={s.id} className="flex flex-col h-full hover:shadow-lg transition-shadow">
+                <div className="flex items-start justify-between mb-3">
+                  <div className="flex-1">
+                    <h3 className="font-bold text-slate-900 text-lg">{s.name}</h3>
+                    <p className="text-sm font-semibold text-rose-600 mt-1">
+                      ฿{s.default_selling_price.toLocaleString('th-TH')}
                     </p>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex gap-1">
                     <button
                       onClick={() => openEdit(s)}
-                      className="text-xs text-slate-500 hover:text-slate-800 font-medium"
+                      className="text-xs px-2 py-1 text-slate-600 hover:bg-slate-100 rounded transition-colors"
                     >
-                      Edit
+                      ✎ Edit
                     </button>
                     <button
                       onClick={() => remove(s)}
-                      className="text-xs text-rose-500 hover:text-rose-700 font-medium"
+                      className="text-xs px-2 py-1 text-rose-600 hover:bg-rose-50 rounded transition-colors"
                     >
-                      Delete
+                      ✕ Del
                     </button>
                   </div>
                 </div>
-                <ul className="mt-3 text-sm space-y-1">
-                  {s.items.map((i) => (
-                    <li key={i.id} className="flex justify-between text-slate-600">
-                      <span>
-                        {i.product_name} × {i.quantity} {i.unit}
-                      </span>
-                      <span>{formatCurrency((i.avg_cost || 0) * i.quantity)}</span>
-                    </li>
-                  ))}
-                  {s.items.length === 0 && (
-                    <li className="text-slate-400">No products linked</li>
-                  )}
-                </ul>
-                <div className="mt-3 pt-3 border-t border-slate-100 text-sm space-y-1">
+                
+                {s.items.length > 0 && (
+                  <div className="mb-3 pb-3 border-b border-slate-100">
+                    <p className="text-xs font-medium text-slate-500 mb-2">Products Used:</p>
+                    <ul className="text-xs space-y-1">
+                      {s.items.map((i) => (
+                        <li key={i.id} className="flex justify-between text-slate-600">
+                          <span>{i.product_name} × {i.quantity}</span>
+                          <span className="text-slate-500">฿{((i.avg_cost || 0) * i.quantity).toLocaleString('th-TH')}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                
+                <div className="mt-auto pt-3 border-t border-slate-100 space-y-2 text-xs">
                   {(settings?.default_deduction_value || 0) > 0 && (
-                    <div className="flex justify-between text-slate-500">
+                    <div className="flex justify-between text-slate-600">
                       <span>{settings?.owner_label || "Owner's cut"}</span>
-                      <span className="text-amber-600">- {formatCurrency(ownerCut)}</span>
+                      <span className="text-amber-600 font-medium">-฿{ownerCut.toLocaleString('th-TH')}</span>
                     </div>
                   )}
-                  <div className="flex justify-between text-slate-500">
-                    <span>Est. drug cost</span>
-                    <span>{formatCurrency(drugCost)}</span>
+                  <div className="flex justify-between text-slate-600">
+                    <span>Drug cost</span>
+                    <span>฿{drugCost.toLocaleString('th-TH')}</span>
                   </div>
-                  <div className="flex justify-between text-slate-500">
-                    <span>Consumable cost</span>
-                    <span>{formatCurrency(s.default_consumable_cost)}</span>
+                  <div className="flex justify-between text-slate-600">
+                    <span>Consumable</span>
+                    <span>฿{s.default_consumable_cost.toLocaleString('th-TH')}</span>
                   </div>
-                  <div className="flex justify-between font-medium text-slate-700">
-                    <span>Est. your earning</span>
+                  <div className="flex justify-between pt-2 border-t border-slate-100 font-bold">
+                    <span className="text-slate-700">Your earning</span>
                     <span className={profit >= 0 ? "text-emerald-600" : "text-rose-600"}>
-                      {formatCurrency(profit)}
+                      ฿{profit.toLocaleString('th-TH')}
                     </span>
                   </div>
                 </div>
